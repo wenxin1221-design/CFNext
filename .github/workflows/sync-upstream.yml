@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch only the upstream plaintext Worker
+      - name: Fetch the upstream Worker and Pages bundle
         shell: bash
         run: |
           set -euo pipefail
@@ -31,6 +31,9 @@ jobs:
           upstream_sha="$(git rev-parse FETCH_HEAD)"
           candidate="$RUNNER_TEMP/cfnext-worker.js"
           git show "FETCH_HEAD:CFNext 明文版.js" > "$candidate"
+          pages_zip="$RUNNER_TEMP/cfnext-pages.zip"
+          pages_worker="$RUNNER_TEMP/cfnext-pages-worker.js"
+          git show "FETCH_HEAD:CFNext 混淆Pages版.zip" > "$pages_zip"
 
           size="$(wc -c < "$candidate")"
           test "$size" -ge 100000
@@ -38,8 +41,16 @@ jobs:
           grep -Fq "from 'cloudflare:sockets'" "$candidate"
           grep -Eq "const VERSION = ['\"][0-9]+\.[0-9]+\.[0-9]+['\"]" "$candidate"
           grep -Fq "export default" "$candidate"
+          test "$(unzip -Z1 "$pages_zip")" = "_worker.js"
+          unzip -p "$pages_zip" _worker.js > "$pages_worker"
+          pages_size="$(wc -c < "$pages_worker")"
+          test "$pages_size" -ge 100000
+          test "$pages_size" -le 1000000
+          grep -Fq "cloudflare:sockets" "$pages_worker"
+          grep -Fq "export default" "$pages_worker"
 
           cp "$candidate" "CFNext 明文版.js"
+          cp "$pages_zip" "CFNext 混淆Pages版.zip"
           printf '%s\n' "$upstream_sha" > UPSTREAM_COMMIT
 
       - name: Install pinned deployment tooling
@@ -52,7 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add -- "CFNext 明文版.js" UPSTREAM_COMMIT
+          git add -- "CFNext 明文版.js" "CFNext 混淆Pages版.zip" UPSTREAM_COMMIT
           if git diff --cached --quiet; then
             echo "Already synchronized."
             exit 0
