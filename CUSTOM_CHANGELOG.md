@@ -19,5 +19,9 @@
   - `BESTIP_POOL_SIZE`：自动优选池大小，1-20，建议 3-5；
   - `BESTIP_HYSTERESIS_MS`：保留当前健康节点的延迟容忍窗口，默认 25 ms。
 - 上游同步流程改为：拉取上游临时文件 → 应用本地补丁 → 验证定制项 → Wrangler dry-run → 提交。
+- 面板增加运行版本身份标识：
+  - 左下角显示 `v<上游版本> <部署形态> · Custom <本地补丁简称>`；
+  - “运行状态”和“面板设置”显示完整 `CUSTOM_PATCHSET`、本仓库与上游仓库；
+  - `/version` 与 `/api/status` 返回 `patchset/repo/upstream`，便于人工及自动巡检确认当前运行的是定制版。
 
 > 上游 `VERSION` 不改名、不另起版本号。本地差异由 `CUSTOM_PATCHSET` 和本文件标识，便于判断“上游版本”和“本地补丁版本”两个维度。
