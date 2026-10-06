@@ -451,7 +451,38 @@ CF-EDGE
 
 ---
 
-## 8. 回滚
+## 8. 如何确认线上运行的是定制版
+
+部署后，面板左下角应显示类似：
+
+```
+v2.3.0 明文版 · Custom v1
+```
+
+在“仪表盘 → 运行状态”或“面板设置 → 运行信息”中还应看到：
+
+```
+本地补丁  stable-bestip-v1
+代码来源  wenxin1221-design/CFNext
+上游来源  PAICNI/CFNext
+```
+
+同时，运行中的 Worker 接口会返回构建身份：
+
+```json
+{
+  "version": "2.3.0",
+  "patchset": "stable-bestip-v1",
+  "repo": "wenxin1221-design/CFNext",
+  "upstream": "PAICNI/CFNext"
+}
+```
+
+因此以后不能只以 `VERSION` 判断是否已更新；必须同时确认 `patchset`。
+
+---
+
+## 9. 回滚
 
 ### 回滚上游同步
 
@@ -476,7 +507,7 @@ CF-EDGE
 
 ---
 
-## 9. 关于 Pages 混淆包
+## 10. 关于 Pages 混淆包
 
 当前本地定制的主要可审计目标是：
 
@@ -494,7 +525,7 @@ CFNext 明文版.js
 
 ---
 
-## 10. 上游版权与致谢
+## 11. 上游版权与致谢
 
 本仓库不是独立原创项目。
 
