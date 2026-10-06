@@ -195,7 +195,7 @@ optimizer.count = 5
 
 注意：
 
-- GitHub Actions 每 6 小时：负责**检查上游代码是否更新**；
+- GitHub Actions 每天一次：负责**检查上游代码是否更新**；
 - Worker Cron 每 6 小时：负责**运行期优选 IP 刷新**。
 
 这是两个完全不同的任务。
@@ -214,7 +214,7 @@ GitHub Actions：
 
 `.github/workflows/sync-upstream.yml`
 
-每 6 小时执行一次：
+每天执行一次：
 
 ```
 1. fetch PAICNI/CFNext main
