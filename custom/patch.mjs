@@ -36,11 +36,16 @@ function replaceRange(label, startMarker, endMarker, replacement) {
 
 // 1) Build identity. Keep upstream VERSION untouched so compatibility/version
 //    comparisons remain meaningful; CUSTOM_PATCHSET identifies our delta.
-replaceOnce(
-  "custom build identity",
-  "const VERSION = '2.3.0';",
-  "const VERSION = '2.3.0';\nconst CUSTOM_UPSTREAM = 'PAICNI/CFNext';\nconst CUSTOM_REPO = 'wenxin1221-design/CFNext';\nconst CUSTOM_PATCHSET = 'stable-bestip-v1';"
-);
+{
+  const re = /const VERSION = ['"]([^'"]+)['"];/;
+  const matches = [...code.matchAll(new RegExp(re.source, 'g'))];
+  if (matches.length !== 1) throw new Error('[patch] expected exactly one VERSION declaration');
+  const original = matches[0][0];
+  code = code.replace(re, original +
+    "\nconst CUSTOM_UPSTREAM = 'PAICNI/CFNext';" +
+    "\nconst CUSTOM_REPO = 'wenxin1221-design/CFNext';" +
+    "\nconst CUSTOM_PATCHSET = 'stable-bestip-v1';");
+}
 
 // 2) The in-panel update checker must point to our customized repository.
 //    Otherwise clicking update would return raw upstream code and remove local
