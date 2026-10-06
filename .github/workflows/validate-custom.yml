@@ -30,5 +30,5 @@ jobs:
       - name: Verify local customization
         run: npm run verify:custom
 
-      - name: Wrangler dry-run
+      - name: Build Pages Advanced Mode artifact
         run: npm run check
