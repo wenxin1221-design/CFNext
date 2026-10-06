@@ -4762,6 +4762,8 @@ pre.code{background:var(--bg2);border:1px solid var(--border);border-radius:8px;
       <div class="card">
         <h3><span class="tick"></span>运行状态</h3>
         <div class="kv"><span class="k">协议</span><span class="v" id="stProto">—</span></div>
+        <div class="kv"><span class="k">本地定制</span><span class="v ok" id="stPatch">—</span></div>
+        <div class="kv"><span class="k">代码来源</span><span class="v" id="stRepo">—</span></div>
         <div class="kv"><span class="k">KV 持久化</span><span class="v" id="stKv">—</span></div>
         <div class="kv"><span class="k">面板入口</span><span class="v" id="stEntry">—</span></div>
       </div>
@@ -5007,6 +5009,9 @@ pre.code{background:var(--bg2);border:1px solid var(--border);border-radius:8px;
       <div class="card">
         <h3><span class="tick"></span>运行信息</h3>
         <div class="kv"><span class="k">面板版本</span><span class="v" id="aVer">—</span></div>
+        <div class="kv"><span class="k">本地补丁</span><span class="v ok" id="aPatch">—</span></div>
+        <div class="kv"><span class="k">代码来源</span><span class="v" id="aRepo">—</span></div>
+        <div class="kv"><span class="k">上游来源</span><span class="v" id="aUpstream">—</span></div>
         <div class="kv"><span class="k">KV 持久化</span><span class="v" id="aKv">—</span></div>
         <div class="kv"><span class="k">轮询窗口</span><span class="v">最近 200 条</span></div>
         <div class="kv"><span class="k">构建日期</span><span class="v">2026-09-21</span></div>
@@ -5229,7 +5234,9 @@ function checkUpdate(){
     if (!r || !r.ok || !r.data) { sv.textContent = topVerText; toast('检测更新失败，请稍后重试', 'err'); return; }
     var d = r.data;
     var kindName = (d.kind === '混淆') ? '混淆版' : '明文版';
-    topVerText = 'v' + d.current + ' ' + kindName;
+    var shortPatch = d.patchset ? String(d.patchset).replace(/^stable-bestip-/, '') : '';
+    var customSuffix = shortPatch ? ' · Custom ' + shortPatch : '';
+    topVerText = 'v' + d.current + ' ' + kindName + customSuffix;
     sv.textContent = topVerText;
     if (d.hasUpdate && d.code) {
       sv.classList.add('has-update');
@@ -5298,9 +5305,19 @@ function renderStatus(d){
   $('aKv').className = 'v ' + (kv ? 'ok' : 'bad');
   var v = d.version || '—';
   var kindName = (d.kind === '混淆版') ? '混淆版' : '明文版';   // 部署形态（明文版 / 混淆版），由后端自检
-  $('sideVer').textContent = 'v' + v + ' ' + kindName;
-  topVerText = 'v' + v + ' ' + kindName;
+  var patchset = d.patchset || '';
+  var shortPatch = patchset ? patchset.replace(/^stable-bestip-/, '') : '';
+  var customSuffix = shortPatch ? ' · Custom ' + shortPatch : '';
+  $('sideVer').textContent = 'v' + v + ' ' + kindName + customSuffix;
+  topVerText = 'v' + v + ' ' + kindName + customSuffix;
   $('aVer').textContent = v + ' ' + kindName;
+  $('stPatch').textContent = patchset || '未检测到';
+  $('stPatch').className = 'v ' + (patchset ? 'ok' : 'bad');
+  $('stRepo').textContent = d.repo || '—';
+  $('aPatch').textContent = patchset || '未检测到';
+  $('aPatch').className = 'v ' + (patchset ? 'ok' : 'bad');
+  $('aRepo').textContent = d.repo || '—';
+  $('aUpstream').textContent = d.upstream || '—';
 }
 function protoText(){
   if (!CFG) return '—';
@@ -6161,7 +6178,12 @@ async function handleRequest(request, env) {
 
   // ---------- 版本接口 ----------
   if (segs[0] === 'version') {
-    return json({ version: VERSION });
+    return json({
+      version: VERSION,
+      patchset: CUSTOM_PATCHSET,
+      repo: CUSTOM_REPO,
+      upstream: CUSTOM_UPSTREAM
+    });
   }
 
   // ---------- 登录 / 首次设置 ----------
@@ -6343,13 +6365,24 @@ async function handleRequest(request, env) {
     }
 
     if (apiName === 'status') {
-      return json({ ok: true, data: { version: VERSION, kind: deployKind() === 'obfuscated' ? '混淆版' : '明文版', host: url.hostname, path: panelPath, region: (request.cf && request.cf.colo) || 'unknown', kv: !!(env.K && typeof env.K.get === 'function'), workersDev: /\.workers\.dev$/i.test(url.hostname) } });
+      return json({ ok: true, data: {
+        version: VERSION,
+        patchset: CUSTOM_PATCHSET,
+        repo: CUSTOM_REPO,
+        upstream: CUSTOM_UPSTREAM,
+        kind: deployKind() === 'obfuscated' ? '混淆版' : '明文版',
+        host: url.hostname,
+        path: panelPath,
+        region: (request.cf && request.cf.colo) || 'unknown',
+        kv: !!(env.K && typeof env.K.get === 'function'),
+        workersDev: /\.workers\.dev$/i.test(url.hostname)
+      } });
     }
 
     if (apiName === 'update') {
       try {
         const r = await checkUpdate(env);
-        const d = { current: r.current, latest: r.latest, hasUpdate: r.hasUpdate, kind: r.kind, error: r.error || '' };
+        const d = { current: r.current, latest: r.latest, hasUpdate: r.hasUpdate, kind: r.kind, patchset: CUSTOM_PATCHSET, repo: CUSTOM_REPO, upstream: CUSTOM_UPSTREAM, error: r.error || '' };
         if (r.hasUpdate && r.code) d.code = r.code;
         return json({ ok: true, data: d });
       } catch (e) { return json({ ok: false, msg: '检测失败: ' + (e.message || e) }, 500); }
