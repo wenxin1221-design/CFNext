@@ -166,5 +166,50 @@ const scheduled = `async function handleScheduled(_controller, env, _ctx) {
 
 replaceRange("stateful scheduled best-ip", scheduledStart, scheduledEnd, scheduled);
 
+
+// 6) Expose local build identity in the UI and status APIs so the running
+//    Worker can be distinguished from raw upstream even when VERSION is equal.
+replaceOnce(
+  "public version identity",
+  "  if (segs[0] === 'version') {\n    return json({ version: VERSION });\n  }",
+  "  if (segs[0] === 'version') {\n    return json({\n      version: VERSION,\n      patchset: CUSTOM_PATCHSET,\n      repo: CUSTOM_REPO,\n      upstream: CUSTOM_UPSTREAM\n    });\n  }"
+);
+
+replaceOnce(
+  "dashboard runtime identity",
+  "        <div class=\"kv\"><span class=\"k\">协议</span><span class=\"v\" id=\"stProto\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"stKv\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">面板入口</span><span class=\"v\" id=\"stEntry\">—</span></div>",
+  "        <div class=\"kv\"><span class=\"k\">协议</span><span class=\"v\" id=\"stProto\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">本地定制</span><span class=\"v ok\" id=\"stPatch\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">代码来源</span><span class=\"v\" id=\"stRepo\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"stKv\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">面板入口</span><span class=\"v\" id=\"stEntry\">—</span></div>"
+);
+
+replaceOnce(
+  "settings runtime identity",
+  "        <div class=\"kv\"><span class=\"k\">面板版本</span><span class=\"v\" id=\"aVer\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"aKv\">—</span></div>",
+  "        <div class=\"kv\"><span class=\"k\">面板版本</span><span class=\"v\" id=\"aVer\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">本地补丁</span><span class=\"v ok\" id=\"aPatch\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">代码来源</span><span class=\"v\" id=\"aRepo\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">上游来源</span><span class=\"v\" id=\"aUpstream\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"aKv\">—</span></div>"
+);
+
+replaceOnce(
+  "render custom identity",
+  "  var v = d.version || '—';\n  var kindName = (d.kind === '混淆版') ? '混淆版' : '明文版';   // 部署形态（明文版 / 混淆版），由后端自检\n  $('sideVer').textContent = 'v' + v + ' ' + kindName;\n  topVerText = 'v' + v + ' ' + kindName;\n  $('aVer').textContent = v + ' ' + kindName;",
+  "  var v = d.version || '—';\n  var kindName = (d.kind === '混淆版') ? '混淆版' : '明文版';   // 部署形态（明文版 / 混淆版），由后端自检\n  var patchset = d.patchset || '';\n  var shortPatch = patchset ? patchset.replace(/^stable-bestip-/, '') : '';\n  var customSuffix = shortPatch ? ' · Custom ' + shortPatch : '';\n  $('sideVer').textContent = 'v' + v + ' ' + kindName + customSuffix;\n  topVerText = 'v' + v + ' ' + kindName + customSuffix;\n  $('aVer').textContent = v + ' ' + kindName;\n  $('stPatch').textContent = patchset || '未检测到';\n  $('stPatch').className = 'v ' + (patchset ? 'ok' : 'bad');\n  $('stRepo').textContent = d.repo || '—';\n  $('aPatch').textContent = patchset || '未检测到';\n  $('aPatch').className = 'v ' + (patchset ? 'ok' : 'bad');\n  $('aRepo').textContent = d.repo || '—';\n  $('aUpstream').textContent = d.upstream || '—';"
+);
+
+replaceOnce(
+  "status api identity",
+  "    if (apiName === 'status') {\n      return json({ ok: true, data: { version: VERSION, kind: deployKind() === 'obfuscated' ? '混淆版' : '明文版', host: url.hostname, path: panelPath, region: (request.cf && request.cf.colo) || 'unknown', kv: !!(env.K && typeof env.K.get === 'function'), workersDev: /\\.workers\\.dev$/i.test(url.hostname) } });\n    }",
+  "    if (apiName === 'status') {\n      return json({ ok: true, data: {\n        version: VERSION,\n        patchset: CUSTOM_PATCHSET,\n        repo: CUSTOM_REPO,\n        upstream: CUSTOM_UPSTREAM,\n        kind: deployKind() === 'obfuscated' ? '混淆版' : '明文版',\n        host: url.hostname,\n        path: panelPath,\n        region: (request.cf && request.cf.colo) || 'unknown',\n        kv: !!(env.K && typeof env.K.get === 'function'),\n        workersDev: /\\.workers\\.dev$/i.test(url.hostname)\n      } });\n    }"
+);
+
+replaceOnce(
+  "update api identity",
+  "        const d = { current: r.current, latest: r.latest, hasUpdate: r.hasUpdate, kind: r.kind, error: r.error || '' };",
+  "        const d = { current: r.current, latest: r.latest, hasUpdate: r.hasUpdate, kind: r.kind, patchset: CUSTOM_PATCHSET, repo: CUSTOM_REPO, upstream: CUSTOM_UPSTREAM, error: r.error || '' };"
+);
+
+replaceOnce(
+  "update ui identity",
+  "    topVerText = 'v' + d.current + ' ' + kindName;\n    sv.textContent = topVerText;",
+  "    var shortPatch = d.patchset ? String(d.patchset).replace(/^stable-bestip-/, '') : '';\n    var customSuffix = shortPatch ? ' · Custom ' + shortPatch : '';\n    topVerText = 'v' + d.current + ' ' + kindName + customSuffix;\n    sv.textContent = topVerText;"
+);
+
 fs.writeFileSync(output, code);
 console.log(`[patch] wrote ${output}`);
