@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
-    "deploy": "wrangler deploy"
+    "patch": "node custom/patch.mjs",
+    "verify:custom": "node custom/verify.mjs \"CFNext 明文版.js\"",
+    "check": "npm run verify:custom && wrangler deploy --dry-run --outdir .wrangler-dry-run",
+    "deploy": "npm run verify:custom && wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "4.135.0"
