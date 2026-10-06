@@ -11,11 +11,14 @@ const checks = [
   ["small pool", "    count: 5,"],
   ["hysteresis", "BESTIP_HYSTERESIS_MS"],
   ["pool size", "BESTIP_POOL_SIZE"],
-  ["fail closed comment", "Fail-closed：自动优选异常时保留上一版 KV"],
+  ["fail closed comment", "Fail-Closed：自动优选异常时保留上一版 KV"],
   ["panel custom badge", "Custom ' + shortPatch"],
   ["status patchset", "patchset: CUSTOM_PATCHSET"],
   ["status repo", "repo: CUSTOM_REPO"],
-  ["status upstream", "upstream: CUSTOM_UPSTREAM"]
+  ["status upstream", "upstream: CUSTOM_UPSTREAM"],
+  ["pages refresh function", "async function refreshBestIPs(env)"],
+  ["pages refresh token", "BESTIP_CRON_TOKEN"],
+  ["pages refresh route", "bestip-refresh"]
 ];
 
 for (const [name, needle] of checks) {

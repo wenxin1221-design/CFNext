@@ -56,7 +56,7 @@ jobs:
       - name: Verify local customization
         run: node custom/verify.mjs "CFNext 明文版.js"
 
-      - name: Validate Worker bundle
+      - name: Build and validate Pages artifact
         run: npm run check
 
       - name: Commit verified upstream update

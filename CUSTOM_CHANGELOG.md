@@ -25,3 +25,21 @@
   - `/version` 与 `/api/status` 返回 `patchset/repo/upstream`，便于人工及自动巡检确认当前运行的是定制版。
 
 > 上游 `VERSION` 不改名、不另起版本号。本地差异由 `CUSTOM_PATCHSET` 和本文件标识，便于判断“上游版本”和“本地补丁版本”两个维度。
+
+
+## Deployment architecture: pages-native-v2
+
+- 正式生产入口统一为 Cloudflare Pages 项目 `cfnext-pages`。
+- 正式域名统一为 `cfnext.851221.xyz`。
+- Pages 构建入口由“解压 `CFNext 混淆Pages版.zip`”改为 `npm run build:pages`。
+- `scripts/build-pages.mjs` 从已应用本地补丁的 `CFNext 明文版.js` 生成 `dist/_worker.js`。
+- `scripts/verify-pages.mjs` 校验 Pages Advanced Mode 产物。
+- 删除根目录 Worker 专用 `wrangler.jsonc`，防止误把独立 Worker 当生产部署入口。
+- Pages 生产继续沿用现有 `U` 环境变量和 `K -> CFNEXT` KV 绑定，不把敏感配置提交到公开仓库。
+- Best-IP 自动刷新改为 Pages 可用模式：
+  - 复用 `refreshBestIPs()`；
+  - 受保护入口 `POST /_ops/bestip-refresh`；
+  - 使用 `BESTIP_CRON_TOKEN` Bearer Token；
+  - GitHub Actions `bestip-refresh.yml` 每 6 小时触发一次；
+  - 未配置 Token 时安全跳过。
+- 旧独立 Worker `cfnext` 暂时保留为迁移期回退参考，Pages 验证稳定后再关闭其自动部署和 Cron。

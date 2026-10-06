@@ -1,0 +1,34 @@
+name: Refresh CFNext Best-IP
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cfnext-bestip-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger production Best-IP refresh
+        env:
+          BESTIP_CRON_TOKEN: ${{ secrets.BESTIP_CRON_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${BESTIP_CRON_TOKEN:-}" ]; then
+            echo "::notice::BESTIP_CRON_TOKEN is not configured; skipping scheduled refresh."
+            exit 0
+          fi
+
+          response="$(curl --fail-with-body --silent --show-error             --retry 2             --retry-all-errors             --connect-timeout 15             --max-time 180             -X POST             -H "Authorization: Bearer ${BESTIP_CRON_TOKEN}"             -H "User-Agent: CFNext-BestIP-Scheduler/1.0"             https://cfnext.851221.xyz/_ops/bestip-refresh)"
+
+          echo "$response"
+          echo "$response" | grep -Fq '"ok":true'

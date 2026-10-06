@@ -12,7 +12,8 @@
 //    TROJAN          true/1 开启 Trojan 协议（TROJAN_PASSWORD 必填）
 //    ALPN            自定义 ALPN 协商
 //    YX              自定义优选 IP 列表（IP:port#名称，逗号分隔）；YXURL 优选器自定义数据源
-//    BESTIP_AUTO     1 启用定时自动优选（scheduled 刷新）
+//    BESTIP_AUTO     1 启用自动优选；Pages 生产环境由受保护 HTTP 调度入口触发
+//    BESTIP_CRON_TOKEN 保护 /_ops/bestip-refresh 的 Bearer Token（Pages 定时调度用）
 //    DEPLOY_EDITION  部署形态：明文版 / 混淆版（手动维护），决定版本更新拉取的仓库文件
 //    CF_ACCOUNT_ID / CF_API_TOKEN  CF 用量监控（需 Account Analytics 读权限）
 //    K               绑定 KV 后读取图形化配置
@@ -6186,6 +6187,21 @@ async function handleRequest(request, env) {
     });
   }
 
+  // ---------- Pages 运维调度入口 ----------
+  // Pages 没有使用本仓库旧 Worker Cron Trigger；由外部调度器以 Bearer Token 调用。
+  if (segs[0] === '_ops' && segs[1] === 'bestip-refresh') {
+    if (request.method !== 'POST') return new Response('Not Found', { status: 404 });
+    const expected = String(env.BESTIP_CRON_TOKEN || '');
+    const auth = request.headers.get('Authorization') || '';
+    if (!expected || auth !== 'Bearer ' + expected) return new Response('Not Found', { status: 404 });
+    try {
+      const result = await refreshBestIPs(env);
+      return json({ ok: true, data: result });
+    } catch (e) {
+      return json({ ok: false, msg: 'Best-IP 刷新失败: ' + (e.message || e) }, 500);
+    }
+  }
+
   // ---------- 登录 / 首次设置 ----------
   if (segs[0] === 'login') {
     const setupMode = !cfg.admin && needSetup(cfg, env);
@@ -6473,9 +6489,85 @@ async function handleRequest(request, env) {
 }
 
 // 定时自动优选：拉取候选 → 测速 → 取最优写入优选节点
-async function handleScheduled(_controller, env, _ctx) {
+async function refreshBestIPs(env) {
   const auto = String(env.BESTIP_AUTO || '').toLowerCase();
-  // 家宽模式定时刷新：HOME_WAN_AUTO=1 时强制刷新 VPN Gate 家宽节点缓存（保证订阅拿到最新最快节点）
+  if (auto !== '1' && auto !== 'true') return { status: 'disabled' };
+
+  const cfg = await loadConfig(env);
+  const cand = await collectCandidates(cfg.optimizer);
+  const fresh = cand.candidates || [];
+  const current = Array.isArray(cfg.preferredIPs) ? cfg.preferredIPs : [];
+
+  // [CUSTOM] 小而稳定的优选池。BESTIP_POOL_SIZE 建议 3-5；允许 1-20。
+  const poolSize = Math.max(1, Math.min(20,
+    Number(env.BESTIP_POOL_SIZE || cfg.optimizer.count || 5) || 5));
+  // [CUSTOM] 防抖阈值：当前 IP 只要仍健康，且延迟不比本轮最佳差超过该值，就优先保留。
+  const hysteresisMs = Math.max(0, Math.min(500,
+    Number(env.BESTIP_HYSTERESIS_MS || 25) || 25));
+
+  // 把当前池也纳入复测，避免“新榜单稍快几毫秒”就整池替换。
+  const merged = [];
+  const seen = new Set();
+  for (const x of [...current, ...fresh]) {
+    if (!x || !x.ip) continue;
+    const port = Number(x.port || cfg.optimizer.port || 443);
+    const key = String(x.ip) + ':' + port;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ ip: String(x.ip), port });
+  }
+  if (!merged.length) return { status: 'no-candidates', poolSize };
+
+  const results = await runLatencyTest(merged, cfg.optimizer.threads || 5, 5000);
+  const healthy = results.filter(r => r.ok && r.latency >= 0);
+  if (!healthy.length) return { status: 'no-healthy-candidates', poolSize }; // Fail-Closed
+
+  const bestLatency = healthy[0].latency;
+  const byKey = new Map(healthy.map(r => [String(r.ip) + ':' + Number(r.port || 443), r]));
+  const selected = [];
+  const selectedKeys = new Set();
+
+  // 先保留健康且仍在合理性能窗口内的当前节点，保持账号/会话出口连续性。
+  for (const x of current) {
+    if (selected.length >= poolSize || !x || !x.ip) break;
+    const port = Number(x.port || cfg.optimizer.port || 443);
+    const key = String(x.ip) + ':' + port;
+    const r = byKey.get(key);
+    if (!r || r.latency > bestLatency + hysteresisMs) continue;
+    selected.push({ ip: String(x.ip), port, latency: r.latency });
+    selectedKeys.add(key);
+  }
+
+  // 再用本轮真正更优/替补节点补足。
+  for (const r of healthy) {
+    if (selected.length >= poolSize) break;
+    const port = Number(r.port || 443);
+    const key = String(r.ip) + ':' + port;
+    if (selectedKeys.has(key)) continue;
+    selected.push({ ip: String(r.ip), port, latency: r.latency });
+    selectedKeys.add(key);
+  }
+  if (!selected.length) return { status: 'no-selection', poolSize };
+
+  const newIPs = selected.map((r, i) => ({
+    ip: r.ip,
+    port: r.port,
+    name: 'CF-BEST-' + String(i + 1).padStart(2, '0')
+  }));
+
+  const oldKeys = current.slice(0, poolSize).map(x => String(x.ip) + ':' + Number(x.port || 443));
+  const newKeys = newIPs.map(x => String(x.ip) + ':' + Number(x.port || 443));
+  if (oldKeys.length === newKeys.length && oldKeys.every((k, i) => k === newKeys[i])) {
+    return { status: 'unchanged', poolSize, bestLatency, selected: newIPs.length };
+  }
+
+  cfg.preferredIPs = newIPs;
+  await saveConfig(env, cfg);
+  return { status: 'updated', poolSize, bestLatency, selected: newIPs.length };
+}
+
+async function handleScheduled(_controller, env, _ctx) {
+  // 兼容独立 Worker/本地测试；Pages 生产环境不依赖 Cron Trigger，而由受保护 HTTP 调度入口调用 refreshBestIPs。
   const hwAuto = String(env.HOME_WAN_AUTO || '').toLowerCase();
   if (hwAuto === '1' || hwAuto === 'true') {
     try {
@@ -6483,79 +6575,10 @@ async function handleScheduled(_controller, env, _ctx) {
       if (hcfg.homeWan) await resolveHomeWanNodes(env, hcfg, true);
     } catch (e) { /* 家宽刷新失败不影响其它 */ }
   }
-  if (auto !== '1' && auto !== 'true') return;
-
   try {
-    const cfg = await loadConfig(env);
-    const cand = await collectCandidates(cfg.optimizer);
-    const fresh = cand.candidates || [];
-    const current = Array.isArray(cfg.preferredIPs) ? cfg.preferredIPs : [];
-
-    // [CUSTOM] 小而稳定的优选池。BESTIP_POOL_SIZE 建议 3-5；允许 1-20。
-    const poolSize = Math.max(1, Math.min(20,
-      Number(env.BESTIP_POOL_SIZE || cfg.optimizer.count || 5) || 5));
-    // [CUSTOM] 防抖阈值：当前 IP 只要仍健康，且延迟不比本轮最佳差超过该值，就优先保留。
-    const hysteresisMs = Math.max(0, Math.min(500,
-      Number(env.BESTIP_HYSTERESIS_MS || 25) || 25));
-
-    // 把当前池也纳入复测，避免“新榜单稍快几毫秒”就整池替换。
-    const merged = [];
-    const seen = new Set();
-    for (const x of [...current, ...fresh]) {
-      if (!x || !x.ip) continue;
-      const port = Number(x.port || cfg.optimizer.port || 443);
-      const key = String(x.ip) + ':' + port;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push({ ip: String(x.ip), port });
-    }
-    if (!merged.length) return;
-
-    const results = await runLatencyTest(merged, cfg.optimizer.threads || 5, 5000);
-    const healthy = results.filter(r => r.ok && r.latency >= 0);
-    if (!healthy.length) return; // Fail-closed：本轮无法证明有更好节点，不覆盖现有池。
-
-    const bestLatency = healthy[0].latency;
-    const byKey = new Map(healthy.map(r => [String(r.ip) + ':' + Number(r.port || 443), r]));
-    const selected = [];
-    const selectedKeys = new Set();
-
-    // 先保留健康且仍在合理性能窗口内的当前节点，保持账号/会话出口连续性。
-    for (const x of current) {
-      if (selected.length >= poolSize || !x || !x.ip) break;
-      const port = Number(x.port || cfg.optimizer.port || 443);
-      const key = String(x.ip) + ':' + port;
-      const r = byKey.get(key);
-      if (!r || r.latency > bestLatency + hysteresisMs) continue;
-      selected.push({ ip: String(x.ip), port, latency: r.latency });
-      selectedKeys.add(key);
-    }
-
-    // 再用本轮真正更优/替补节点补足。
-    for (const r of healthy) {
-      if (selected.length >= poolSize) break;
-      const port = Number(r.port || 443);
-      const key = String(r.ip) + ':' + port;
-      if (selectedKeys.has(key)) continue;
-      selected.push({ ip: String(r.ip), port, latency: r.latency });
-      selectedKeys.add(key);
-    }
-    if (!selected.length) return;
-
-    const newIPs = selected.map((r, i) => ({
-      ip: r.ip,
-      port: r.port,
-      name: 'CF-BEST-' + String(i + 1).padStart(2, '0')
-    }));
-
-    const oldKeys = current.slice(0, poolSize).map(x => String(x.ip) + ':' + Number(x.port || 443));
-    const newKeys = newIPs.map(x => String(x.ip) + ':' + Number(x.port || 443));
-    if (oldKeys.length === newKeys.length && oldKeys.every((k, i) => k === newKeys[i])) return;
-
-    cfg.preferredIPs = newIPs;
-    await saveConfig(env, cfg);
+    await refreshBestIPs(env);
   } catch (e) {
-    // Fail-closed：自动优选异常时保留上一版 KV，不写空池、不做破坏性替换。
+    // Fail-Closed：自动优选异常时保留上一版 KV，不写空池、不做破坏性替换。
   }
 }
 

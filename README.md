@@ -1,473 +1,190 @@
-# CFNext Customized
+# CFNext Customized — Pages Native
 
-本仓库是 **CFNext 的定制维护分支**。目标不是脱离上游，而是在保留上游快速演进能力的同时，增加适合本项目使用场景的稳定优选与可维护升级机制。
+本仓库是 **PAICNI/CFNext 的定制维护分支**。生产部署采用 **Cloudflare Pages Advanced Mode**，而不是独立 Worker 作为正式入口。
 
-> 当前上游：**PAICNI/CFNext**  
-> 当前本地补丁集：**stable-bestip-v1**  
-> 定制仓库：**wenxin1221-design/CFNext**
+> 上游：`PAICNI/CFNext`  
+> 定制仓库：`wenxin1221-design/CFNext`  
+> 本地补丁集：`stable-bestip-v1`  
+> 生产项目：`cfnext-pages`  
+> 生产域名：`cfnext.851221.xyz`  
+> 生产分支：`main`
 
 ---
 
-## 1. 继承关系
+## 1. 当前生产架构
 
-本仓库继承自：
-
-- 上游项目：`PAICNI/CFNext`
-- 上游主分支：`main`
-- 上游核心文件：`CFNext 明文版.js`
-- 上游版本号：沿用上游 `VERSION`，不自造版本号
-- 本地差异版本：使用 `CUSTOM_PATCHSET` 标记
-
-也就是说：
-
-```
+```text
 PAICNI/CFNext
       │
-      │  拉取上游 main
-      ▼
-上游 CFNext 明文版.js
-      │
-      │  custom/patch.mjs
+      │ 每日检查上游 main
       ▼
 wenxin1221-design/CFNext
-定制 CFNext 明文版.js
       │
-      │  custom/verify.mjs
-      │  wrangler dry-run
+      ├── custom/patch.mjs
+      ├── custom/verify.mjs
+      └── CFNext 明文版.js
+      │
+      │ git push / merge → main
       ▼
-允许进入 main / 部署
+Cloudflare Pages: cfnext-pages
+      │
+      │ Build command: npm run build:pages
+      │ Output directory: dist
+      ▼
+dist/_worker.js
+      │
+      ▼
+Pages Advanced Mode
+      │
+      ▼
+https://cfnext.851221.xyz
 ```
 
-### 为什么不直接长期魔改单文件
+生产流量以 **cfnext-pages** 为准。
 
-如果直接修改 `CFNext 明文版.js`，上游更新时很容易出现两种问题：
-
-1. 自动同步覆盖本地改动；
-2. 人工合并后漏掉某一项定制。
-
-因此本仓库采用 **“上游原版 + 可重复应用补丁层”**：
-
-- 上游代码是基础；
-- 本地定制集中在 `custom/patch.mjs`；
-- 本地约束集中在 `custom/verify.mjs`；
-- 差异说明集中在 `CUSTOM_CHANGELOG.md`。
+仓库历史上还存在一个独立 Cloudflare Worker `cfnext`。它不是生产域名 `cfnext.851221.xyz` 的正式入口；在 Pages-native 架构验证稳定后，应停止它的自动构建与 Cron，暂不急于删除，以便短期回退。
 
 ---
 
-## 2. 本仓库自己修改了什么
+## 2. 继承自哪里
 
-当前补丁集：`stable-bestip-v1`。
+本仓库继承：
 
-### 2.1 更新来源改为本仓库
+- 上游仓库：`PAICNI/CFNext`
+- 上游分支：`main`
+- 上游核心源码：`CFNext 明文版.js`
+- 上游版本号：继续使用上游 `VERSION`
+- 当前上游提交：记录在 `UPSTREAM_COMMIT`
 
-上游代码里的面板更新检查默认指向：
-
-```
-PAICNI/CFNext
-```
-
-本仓库改为：
-
-```
-wenxin1221-design/CFNext
-```
-
-原因是：如果面板直接拉取上游代码，会绕过本地补丁层，导致本地定制消失。
-
-### 2.2 默认关闭订阅随机洗牌
-
-上游默认：
-
-```
-loadBalance = true
-```
-
-本仓库默认：
-
-```
-loadBalance = false
-```
-
-原因：
-
-- CFNext 负责生成稳定候选池；
-- OpenClash / Mihomo 负责运行期健康检查、延迟检测和故障切换；
-- 不希望每次刷新订阅时都改变节点顺序。
-
-如确实需要上游行为，仍可在面板手动重新开启。
-
-### 2.3 优选池默认从 20 个收敛到 5 个
-
-本仓库默认：
-
-```
-optimizer.count = 5
-```
-
-目标是构建小而稳定的 CF-EDGE 池，避免：
-
-- 节点过多；
-- 客户端探测噪声；
-- 订阅体积膨胀；
-- 因为微小延迟变化导致节点频繁漂移。
-
-建议范围：
-
-```
-3 ~ 5
-```
-
-### 2.4 自动优选改为状态化优选
-
-上游自动优选逻辑更偏向：
-
-```
-每次测量
-→ 排名
-→ 取 Top N
-→ 覆盖 preferredIPs
-```
-
-本仓库改为：
-
-```
-现有优选池
-      +
-新候选池
-      ↓
-共同复测
-      ↓
-当前节点仍健康？
-      │
-      ├─ 是，且性能仍在容忍窗口内 → 保留
-      │
-      └─ 否 → 用新节点替换
-      ↓
-最终保持 3~5 个稳定节点
-```
-
-默认防抖阈值：
-
-```
-25 ms
-```
-
-也就是说，新节点只是比现有节点快几毫秒时，不触发替换。
-
-### 2.5 自动优选 Fail-Closed
-
-如果某次自动任务出现：
-
-- 外部候选源不可达；
-- 测速失败；
-- 结果为空；
-- 代码异常；
-
-则：
-
-```
-保留上一版 preferredIPs
-不写空池
-不强制切换
-```
-
-这与本项目“稳定优先、可回退”的原则一致。
-
-### 2.6 新增环境变量
-
-| 变量 | 默认 | 说明 |
-|---|---:|---|
-| `BESTIP_AUTO` | 关闭 | `1` / `true` 时启用 Worker 定时自动优选 |
-| `BESTIP_POOL_SIZE` | 5 | 优选池大小，允许 1-20，建议 3-5 |
-| `BESTIP_HYSTERESIS_MS` | 25 | 当前健康节点的延迟容忍窗口 |
-| `YXURL` | 空 | 自定义候选优选数据源 |
-| `YX` | 空 | 手工优选 IP 列表 |
-
-### 2.7 Worker Cron Trigger
-
-`wrangler.jsonc` 中声明：
-
-```
-43 */6 * * *
-```
-
-即每 6 小时触发一次 Worker `scheduled()`。
-
-注意：
-
-- GitHub Actions 每天一次：负责**检查上游代码是否更新**；
-- Worker Cron 每 6 小时：负责**运行期优选 IP 刷新**。
-
-这是两个完全不同的任务。
-
-如果 `BESTIP_AUTO` 未设置为 `1` / `true`，Worker Cron 会触发，但不会改写优选池。
-
----
-
-## 3. 上游每次改变时，我们怎么做
-
-这是本仓库最重要的维护规则。
-
-### 3.1 正常自动流程
-
-GitHub Actions：
-
-`.github/workflows/sync-upstream.yml`
-
-每天执行一次：
-
-```
-1. fetch PAICNI/CFNext main
-2. 读取上游 CFNext 明文版.js
-3. 记录上游 commit 到 UPSTREAM_COMMIT
-4. 应用 custom/patch.mjs
-5. 执行 custom/verify.mjs
-6. 执行 wrangler deploy --dry-run
-7. 全部成功
-8. 才允许 commit 到本仓库 main
-```
-
-### 3.2 如果上游只是普通版本升级
+本仓库**不伪造一个新的上游版本号**。
 
 例如：
 
-```
-2.3.0 → 2.4.0
-```
-
-而代码结构仍兼容：
-
-```
-自动拉取
-→ 自动套补丁
-→ 自动验证
-→ 自动 dry-run
-→ 自动提交
+```text
+VERSION = 2.3.0
+CUSTOM_PATCHSET = stable-bestip-v1
 ```
 
-不需要人工处理。
+含义是：
 
-### 3.3 如果上游改了关键代码结构
-
-例如：
-
-- 删除 `loadBalance`；
-- 修改 `DEFAULT_CONFIG`；
-- 重写 `handleScheduled()`；
-- 改掉更新检查结构；
-
-那么 `custom/patch.mjs` 找不到预期锚点时会直接失败。
-
-结果：
-
-```
-上游新版
-   ↓
-补丁失败
-   ↓
-Action 失败
-   ↓
-不提交
-   ↓
-main 保持上一版可用代码
+```text
+上游能力版本：CFNext 2.3.0
+本地差异版本：stable-bestip-v1
 ```
 
-这是有意设计的 **Fail-Closed**。
+这样可以同时回答两个问题：
 
-不能为了“同步成功”而静默丢掉定制项。
-
-### 3.4 人工处理冲突的标准流程
-
-当 Action 因上游结构变化失败时：
-
-1. 查看上游新版本变更；
-2. 对照 `CUSTOM_CHANGELOG.md`；
-3. 判断我们的定制是否仍然需要；
-4. 修改 `custom/patch.mjs`；
-5. 必要时修改 `custom/verify.mjs`；
-6. 生成新的 `CFNext 明文版.js`；
-7. 执行：
-
-```bash
-npm ci
-npm run verify:custom
-npm run check
-```
-
-8. 检查订阅生成；
-9. 检查优选池；
-10. 检查 OpenClash 导入；
-11. 再合并到 `main`。
+1. 当前基于上游哪个版本？
+2. 当前又叠加了哪些本地修改？
 
 ---
 
-## 4. 哪些文件可以改，哪些不要直接改
+## 3. 我们自己修改了什么
 
-### 应该修改
+所有本地差异必须可追踪，详细记录见：
 
-```
-custom/patch.mjs
-custom/verify.mjs
+```text
 CUSTOM_CHANGELOG.md
-README.md
-.github/workflows/sync-upstream.yml
-wrangler.jsonc
-package.json
 ```
 
-### 不建议把人工修改直接写进
+当前主要修改如下。
 
-```
-CFNext 明文版.js
-```
+### 3.1 可重复应用的补丁层
 
-因为它应该被视为：
+不把长期修改只写死在生成后的 `CFNext 明文版.js` 中。
 
-> 上游源码 + 本地补丁后的生成结果。
+本地修改的源头是：
 
-如果需要新增功能，原则上应该：
-
-```
-先修改 custom/patch.mjs
-→ 再重新生成 CFNext 明文版.js
+```text
+custom/patch.mjs
 ```
 
-而不是反过来。
+流程：
 
----
-
-## 5. 当前仓库结构
-
-```
-CFNext/
-├── CFNext 明文版.js
-├── CFNext 混淆Pages版.zip
-├── UPSTREAM_COMMIT
-├── README.md
-├── CUSTOM_CHANGELOG.md
-├── package.json
-├── wrangler.jsonc
-│
-├── custom/
-│   ├── patch.mjs
-│   └── verify.mjs
-│
-└── .github/
-    └── workflows/
-        └── sync-upstream.yml
+```text
+上游 CFNext 明文版.js
+        ↓
+custom/patch.mjs
+        ↓
+定制 CFNext 明文版.js
+        ↓
+custom/verify.mjs
+        ↓
+允许构建
 ```
 
-### 文件职责
+如果上游代码结构发生变化，导致补丁锚点失效，补丁脚本会报错停止，不能静默丢失本地定制。
 
-| 文件 | 职责 |
-|---|---|
-| `UPSTREAM_COMMIT` | 当前定制版基于哪个上游提交 |
-| `custom/patch.mjs` | 所有本地代码修改的单一来源 |
-| `custom/verify.mjs` | 防止本地定制在同步过程中丢失 |
-| `CUSTOM_CHANGELOG.md` | 记录本地差异 |
-| `README.md` | 维护规范和使用说明 |
-| `CFNext 明文版.js` | 可部署生成物 |
-| `sync-upstream.yml` | 上游同步与验证流程 |
+这是 **Fail-Closed**。
 
----
+### 3.2 更新检查改为本仓库
 
-## 6. 自动优选架构
+面板内更新来源由上游仓库改为：
 
-推荐整体关系：
-
-```
-              外部候选数据源
-      ┌────────┼─────────┐
-      │        │         │
-   WeTest    BestCF   HostMonit
-      │        │         │
-      └────────┼─────────┘
-               ▼
-        CFNext Candidate Pool
-               │
-               ▼
-         TCP 延迟 / 可用性
-               │
-               ▼
-       Stateful Best-IP
-        3~5 个稳定节点
-               │
-               ▼
-         preferredIPs / KV
-               │
-               ▼
-             CFNext
-               │
-               ▼
-          OpenClash Provider
-               │
-               ▼
-       url-test / fallback
-               │
-               ▼
-            CF-EDGE
+```text
+wenxin1221-design/CFNext
 ```
 
-职责边界：
+避免面板更新时直接拿上游原版覆盖本地定制。
 
-- **CFNext**：候选汇聚、定时优选、订阅生成；
-- **KV**：保存当前稳定优选池；
-- **OpenClash**：客户端运行期探测、选择和故障切换；
-- **AI-PINNED**：仍应优先使用固定自建出口，不应把 CF-EDGE 作为账号连续性敏感业务的主要出口。
+### 3.3 稳定优先的 CF-EDGE 策略
 
----
+默认：
 
-## 7. 推荐参数
-
-对于当前使用方式：
-
-```
-BESTIP_AUTO=1
-BESTIP_POOL_SIZE=5
-BESTIP_HYSTERESIS_MS=25
-```
-
-CFNext：
-
-```
-polling = false
+```text
 loadBalance = false
 optimizer.count = 5
-IPv6 = off（除非单独验证）
 ```
 
-OpenClash：
+职责分工：
 
-```
-CF-EDGE
-├── CF-BEST-01
-├── CF-BEST-02
-├── CF-BEST-03
-├── CF-BEST-04
-└── CF-BEST-05
-```
+- CFNext：生成小而稳定的候选池；
+- OpenClash / Mihomo：负责客户端实际健康检查与故障切换。
 
-由 OpenClash 对这些节点做实际客户端视角的健康检查。
+不让 CFNext 每次刷新订阅都随机洗牌。
 
----
+### 3.4 Stateful Best-IP
 
-## 8. 如何确认线上运行的是定制版
+自动优选不再简单执行：
 
-部署后，面板左下角应显示类似：
-
-```
-v2.3.0 明文版 · Custom v1
+```text
+每次测速 → Top N → 全量覆盖
 ```
 
-在“仪表盘 → 运行状态”或“面板设置 → 运行信息”中还应看到：
+而是：
 
-```
-本地补丁  stable-bestip-v1
-代码来源  wenxin1221-design/CFNext
-上游来源  PAICNI/CFNext
+```text
+现有优选池
+    +
+新候选池
+    ↓
+共同复测
+    ↓
+现有节点仍健康且差距很小？
+    ├── 是 → 保留
+    └── 否 → 才替换
 ```
 
-同时，运行中的 Worker 接口会返回构建身份：
+默认：
+
+```text
+BESTIP_POOL_SIZE = 5
+BESTIP_HYSTERESIS_MS = 25
+```
+
+测量失败时：
+
+```text
+不清空 preferredIPs
+不强制替换
+保留上一版 KV
+```
+
+### 3.5 定制版本身份
+
+生产面板可以明确区分“上游原版”和“本地定制版”。
+
+`/version` 返回类似：
 
 ```json
 {
@@ -478,67 +195,422 @@ v2.3.0 明文版 · Custom v1
 }
 ```
 
-因此以后不能只以 `VERSION` 判断是否已更新；必须同时确认 `patchset`。
+面板左下角显示类似：
 
----
-
-## 9. 回滚
-
-### 回滚上游同步
-
-`UPSTREAM_COMMIT` 记录了当前基线。
-
-如果新同步版本出现问题：
-
-- 回退本仓库上一提交；
-- Cloudflare 重新部署上一版 `CFNext 明文版.js`。
-
-### 回滚本地定制
-
-如果怀疑本地补丁有问题：
-
-1. 从对应 `UPSTREAM_COMMIT` 取原始 `CFNext 明文版.js`；
-2. 不应用 `custom/patch.mjs`；
-3. 单独部署验证。
-
-这样可以迅速判断：
-
-> 问题来自上游，还是来自本地补丁。
-
----
-
-## 10. 关于 Pages 混淆包
-
-当前本地定制的主要可审计目标是：
-
+```text
+v2.3.0 明文版 · Custom v1
 ```
+
+---
+
+## 4. 为什么改成 Pages-native
+
+此前 `cfnext-pages` 的构建命令是：
+
+```bash
+mkdir -p dist && unzip -p 'CFNext 混淆Pages版.zip' _worker.js > dist/_worker.js
+```
+
+这个流程的问题是：
+
+```text
+GitHub 中的定制 CFNext 明文版.js
+          ×
+没有进入生产
+```
+
+Pages 实际发布的是上游 ZIP 中旧的 `_worker.js`。
+
+所以即使 GitHub `main` 已经更新，生产域名仍可能显示旧逻辑。
+
+新的生产构建命令统一为：
+
+```bash
+npm run build:pages
+```
+
+构建过程：
+
+```text
 CFNext 明文版.js
+    ↓
+verify:custom
+    ↓
+scripts/build-pages.mjs
+    ↓
+dist/_worker.js
+    ↓
+scripts/verify-pages.mjs
 ```
 
-`CFNext 混淆Pages版.zip` 继续同步上游原包，主要作为上游制品保留。
-
-如果要确保 Pages 部署也应用完全相同的本地定制，应另做专门的 Pages 构建流程，而不要假定混淆包自动继承本地补丁。
-
-当前推荐部署形态：
-
-> **Worker + 明文定制版 + Wrangler/Git 部署**
+Cloudflare Pages 直接部署 `dist/_worker.js`，使用 Pages Advanced Mode。
 
 ---
 
-## 11. 上游版权与致谢
+## 5. Cloudflare Pages 生产配置
+
+当前正式项目：
+
+```text
+cfnext-pages
+```
+
+正式域名：
+
+```text
+cfnext.851221.xyz
+```
+
+Git：
+
+```text
+Repository: wenxin1221-design/CFNext
+Production branch: main
+Output directory: dist
+Build command: npm run build:pages
+```
+
+### 5.1 生产环境必须保留
+
+Cloudflare Pages Dashboard 中：
+
+- 环境变量 `U`：已配置；
+- KV Binding `K`：绑定现有 `CFNEXT` 命名空间；
+- Compatibility Date：保持现有生产设置。
+
+**不要把 `U`、管理密码、Token 等私密配置提交进公开仓库。**
+
+### 5.2 Preview 环境
+
+当前 Preview 环境没有生产的 `U` 与 `K`。
+
+因此 Preview 部署主要用于验证：
+
+- 构建是否成功；
+- `dist/_worker.js` 是否生成；
+- Pages Functions 是否能部署。
+
+不能把 Preview 上的“面板无法完整登录/配置无法持久化”直接判定为生产代码故障。
+
+如以后需要完整预览环境，应单独给 Preview 配置测试用变量与测试 KV，不要直接复用生产秘密。
+
+---
+
+## 6. Best-IP 在 Pages 中如何定时运行
+
+Cloudflare Pages 与独立 Worker 的 Cron Trigger 不是同一个部署模型。
+
+因此生产 Pages **不依赖旧 Worker 的 `triggers.crons`**。
+
+代码提供受保护入口：
+
+```text
+POST /_ops/bestip-refresh
+Authorization: Bearer <BESTIP_CRON_TOKEN>
+```
+
+需要同时配置：
+
+### Cloudflare Pages Production
+
+```text
+BESTIP_AUTO=1
+BESTIP_POOL_SIZE=5
+BESTIP_HYSTERESIS_MS=25
+BESTIP_CRON_TOKEN=<随机秘密>
+```
+
+### GitHub Actions Secret
+
+```text
+BESTIP_CRON_TOKEN=<与 Pages 相同>
+```
+
+定时任务：
+
+```text
+.github/workflows/bestip-refresh.yml
+```
+
+默认每 6 小时调用一次生产刷新接口。
+
+如果 GitHub Secret 未配置，工作流会安全跳过，不会带空 Token 请求生产接口。
+
+---
+
+## 7. 上游每天更新时怎么处理
+
+上游检查工作流：
+
+```text
+.github/workflows/sync-upstream.yml
+```
+
+当前每天执行一次，也可以手动触发。
+
+完整流程：
+
+```text
+PAICNI/CFNext main
+        ↓
+读取上游 CFNext 明文版.js
+        ↓
+记录 UPSTREAM_COMMIT
+        ↓
+应用 custom/patch.mjs
+        ↓
+custom/verify.mjs
+        ↓
+npm run build:pages
+        ↓
+verify-pages
+        ↓
+全部成功？
+   ┌────┴────┐
+   │         │
+  YES       NO
+   │         │
+提交 main   停止
+   │         │
+Pages自动部署  保持旧生产版本
+```
+
+---
+
+## 8. 如果上游只是普通升级
+
+例如：
+
+```text
+2.3.0 → 2.4.0
+```
+
+如果补丁锚点仍兼容：
+
+```text
+自动拉取
+→ 自动套补丁
+→ 自动验证
+→ 自动生成 Pages artifact
+→ 自动提交 main
+→ Pages 自动部署
+```
+
+无需人工处理。
+
+---
+
+## 9. 如果上游重构导致补丁失败
+
+例如上游：
+
+- 删除或改名 `loadBalance`；
+- 重写 `DEFAULT_CONFIG`；
+- 重写 `handleScheduled()`；
+- 修改面板状态区；
+- 修改版本检查结构。
+
+那么：
+
+```text
+custom/patch.mjs
+找不到唯一锚点
+      ↓
+Action 失败
+      ↓
+不提交 main
+      ↓
+Cloudflare Pages 不发布坏版本
+```
+
+人工处理步骤：
+
+1. 查看上游新版本变更；
+2. 查看 `CUSTOM_CHANGELOG.md`；
+3. 判断现有定制是否仍需要；
+4. 修改 `custom/patch.mjs`；
+5. 必要时修改 `custom/verify.mjs`；
+6. 执行 `npm run check`；
+7. 在非生产分支验证 Pages Preview 构建；
+8. 合并到 `main`；
+9. 检查生产 `/version`；
+10. 检查面板与订阅。
+
+---
+
+## 10. 哪些文件应该修改
+
+长期维护时优先修改：
+
+```text
+custom/patch.mjs
+custom/verify.mjs
+scripts/build-pages.mjs
+scripts/verify-pages.mjs
+CUSTOM_CHANGELOG.md
+README.md
+.github/workflows/*.yml
+package.json
+```
+
+`CFNext 明文版.js` 是：
+
+> 上游源码 + 本地补丁后的可部署源码。
+
+新增长期功能时，不能只手改生成文件而不更新补丁层。
+
+---
+
+## 11. 仓库结构
+
+```text
+CFNext/
+├── CFNext 明文版.js
+├── CFNext 混淆Pages版.zip       # 仅保留上游制品，不再作为生产构建入口
+├── CFNext 混淆版.js
+├── UPSTREAM_COMMIT
+│
+├── README.md
+├── CUSTOM_CHANGELOG.md
+├── package.json
+├── package-lock.json
+│
+├── custom/
+│   ├── patch.mjs
+│   └── verify.mjs
+│
+├── scripts/
+│   ├── build-pages.mjs
+│   └── verify-pages.mjs
+│
+└── .github/
+    └── workflows/
+        ├── sync-upstream.yml
+        ├── validate-custom.yml
+        └── bestip-refresh.yml
+```
+
+生产构建产生：
+
+```text
+dist/
+├── _worker.js
+└── build-meta.json
+```
+
+`dist/` 不提交 Git。
+
+---
+
+## 12. 发布前验证
+
+### 仓库侧
+
+```bash
+npm ci
+npm run check
+```
+
+必须通过：
+
+- custom invariant；
+- Pages artifact 构建；
+- Pages artifact 结构校验。
+
+### Cloudflare 侧
+
+合并 `main` 后确认：
+
+```text
+cfnext-pages
+→ Production deployment
+→ commit 与 GitHub main 一致
+```
+
+### 线上
+
+访问：
+
+```text
+https://cfnext.851221.xyz/version
+```
+
+必须能看到：
+
+```json
+{
+  "version": "...",
+  "patchset": "stable-bestip-v1",
+  "repo": "wenxin1221-design/CFNext",
+  "upstream": "PAICNI/CFNext"
+}
+```
+
+然后检查面板左下角是否出现：
+
+```text
+Custom v1
+```
+
+最后检查原订阅地址是否仍可正常刷新。
+
+---
+
+## 13. 回滚
+
+### 代码回滚
+
+如果新版本异常：
+
+1. 回退 GitHub `main` 到上一个已知正常提交；
+2. Pages 自动重新部署；
+3. 验证 `/version`；
+4. 验证订阅和面板。
+
+### 上游 / 本地问题隔离
+
+`UPSTREAM_COMMIT` 用于定位当前上游基线。
+
+如果怀疑本地补丁：
+
+```text
+同一 UPSTREAM_COMMIT
+├── 原始上游代码
+└── 应用 stable-bestip-v1 后的代码
+```
+
+对比即可判断故障来自上游还是本地修改。
+
+### 独立 Worker
+
+在 Pages-native 生产验证完成前，旧 `cfnext` Worker 暂时保留作为短期回退参考。
+
+确认 Pages 连续稳定后：
+
+- 关闭旧 Worker 的 Git 自动部署；
+- 关闭旧 Worker Cron；
+- 不再把它作为生产维护对象。
+
+删除资源应作为单独操作，不和本次迁移混在一起。
+
+---
+
+## 14. 上游版权与致谢
 
 本仓库不是独立原创项目。
 
-核心能力、协议实现、面板及大量功能来自：
+核心协议、面板、代理与订阅能力来自：
 
-**PAICNI/CFNext**
+`PAICNI/CFNext`
 
-本仓库只维护面向自身网络架构的定制补丁和自动同步机制。
+本仓库维护的是：
 
-上游地址：
+- 可重复应用的本地补丁；
+- 稳定 Best-IP 策略；
+- OpenClash 配合策略；
+- Pages-native 构建与部署链；
+- 自动同步、验证与回滚规范。
 
-`https://github.com/PAICNI/CFNext`
+上游：
 
-具体本地差异请查看：
-
-`CUSTOM_CHANGELOG.md`
+https://github.com/PAICNI/CFNext
