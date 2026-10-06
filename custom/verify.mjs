@@ -15,7 +15,10 @@ const checks = [
   ["panel custom badge", "Custom ' + shortPatch"],
   ["status patchset", "patchset: CUSTOM_PATCHSET"],
   ["status repo", "repo: CUSTOM_REPO"],
-  ["status upstream", "upstream: CUSTOM_UPSTREAM"]
+  ["status upstream", "upstream: CUSTOM_UPSTREAM"],
+  ["pages refresh function", "async function refreshBestIPs(env)"],
+  ["pages refresh token", "BESTIP_CRON_TOKEN"],
+  ["pages refresh route", "bestip-refresh"]
 ];
 
 for (const [name, needle] of checks) {
