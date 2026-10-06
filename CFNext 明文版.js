@@ -20,6 +20,9 @@
 import { connect } from 'cloudflare:sockets';
 
 const VERSION = '2.3.0';
+const CUSTOM_UPSTREAM = 'PAICNI/CFNext';
+const CUSTOM_REPO = 'wenxin1221-design/CFNext';
+const CUSTOM_PATCHSET = 'stable-bestip-v1';
 
 // 部署形态标注（手动维护）：明文版部署保持「明文版」；生成混淆版部署前，请将下方标注手动改为「混淆版」。
 // 更新检测时：统一以仓库「CFNext 明文版.js」的版本号为比对基准（明文与混淆同步发布同一版本号），
@@ -34,7 +37,7 @@ function deployKind(){
 
 // 更新检测：点击版本号后拉取仓库代码比对版本号；有新版本时返回最新代码供面板复制
 // 明文版与混淆版同步发布同一版本号：版本基准统一用「CFNext 明文版.js」，按自身形态复制对应代码
-const UPDATE_REPO = 'PAICNI/CFNext';
+const UPDATE_REPO = 'wenxin1221-design/CFNext';
 let UPDATE_CACHE = null; // { t, r } 60 秒缓存
 
 function parseVer(v){
@@ -537,7 +540,7 @@ const DEFAULT_CONFIG = {
   nodeLimit: true,      // 节点数量控制：默认开启，按 nodeLimitCount 精确限制节点总数
   nodeLimitCount: 500,  // 开启节点数量控制后，最多下发的节点数（默认 500）
   polling: false,       // 轮询机制：开启后每次更新订阅轮询下发新节点（KV issued 去重 + 数量限制），关闭后忽略轮询与限制、下发全部节点
-  loadBalance: true,    // 负载均衡：每次订阅请求对下发节点顺序做随机轮换（Fisher-Yates 打乱），分散客户端连接、避免头部节点拥塞变慢；关闭则保持原有固定顺序
+  loadBalance: false,   // [CUSTOM] 稳定优先：默认关闭每次订阅随机洗牌，由 OpenClash/Mihomo 在客户端侧负责 health-check/failover；需要上游原行为时可在面板手动开启
                         //   保底前置：无论负载均衡开关如何，「内置·保底 / 隧道前置」节点始终保留在清单头部并按保底组内部乱序
                         //   （客户端「取第一个」即稳定可用节点），其余节点整体乱序
   ipv6Mode: 'off',      // ★ IPv6 下发策略（清单质量）：IPv6 到 CF 的可达性依赖客户端所在网络，不少家庭宽带 v6 到 CF 的路径
@@ -580,7 +583,7 @@ const DEFAULT_CONFIG = {
     sourceURL: '',       // 自定义数据源 URL
     port: 443,
     threads: 5,
-    count: 20,
+    count: 5,          // [CUSTOM] 默认维护 5 个优选入口，避免大池污染客户端探测与频繁漂移
     useCidr: true,
     fillCount: 0,        // 节点 IP 不足时用 CF CIDR 随机补足（0 关闭；默认关闭，只下发真实优选节点）
     subMode: '',         // 订阅模式：'' 关闭（使用面板默认）/ custom 自定义订阅（支持汇聚）/ random 随机优选
@@ -6448,23 +6451,79 @@ async function handleScheduled(_controller, env, _ctx) {
     } catch (e) { /* 家宽刷新失败不影响其它 */ }
   }
   if (auto !== '1' && auto !== 'true') return;
+
   try {
     const cfg = await loadConfig(env);
     const cand = await collectCandidates(cfg.optimizer);
-    const candidates = cand.candidates || [];
-    if (!candidates.length) return;
-    const results = await runLatencyTest(candidates, cfg.optimizer.threads || 5, 5000);
-    const best = results.filter(r => r.ok).slice(0, cfg.optimizer.count || 20);
-    if (!best.length) return;
-    const newIPs = best.map(r => ({ ip: r.ip, port: r.port || 443, name: '' }));
-    // ★ 节流：最优 IP 集合未变化时不写 KV（免费 KV 写额度 1000 次/日，避免高频 cron 写爆）；
-    // 按「top 集合一致」判断（负载均衡默认打乱顺序，顺序本身无意义，集合一致即无需更新）
-    const cur = new Set((cfg.preferredIPs || []).map(x => x.ip));
-    const nw = new Set(newIPs.map(x => x.ip));
-    if (cur.size === nw.size && [...nw].every(ip => cur.has(ip))) return;   // 无变化，跳过写入
+    const fresh = cand.candidates || [];
+    const current = Array.isArray(cfg.preferredIPs) ? cfg.preferredIPs : [];
+
+    // [CUSTOM] 小而稳定的优选池。BESTIP_POOL_SIZE 建议 3-5；允许 1-20。
+    const poolSize = Math.max(1, Math.min(20,
+      Number(env.BESTIP_POOL_SIZE || cfg.optimizer.count || 5) || 5));
+    // [CUSTOM] 防抖阈值：当前 IP 只要仍健康，且延迟不比本轮最佳差超过该值，就优先保留。
+    const hysteresisMs = Math.max(0, Math.min(500,
+      Number(env.BESTIP_HYSTERESIS_MS || 25) || 25));
+
+    // 把当前池也纳入复测，避免“新榜单稍快几毫秒”就整池替换。
+    const merged = [];
+    const seen = new Set();
+    for (const x of [...current, ...fresh]) {
+      if (!x || !x.ip) continue;
+      const port = Number(x.port || cfg.optimizer.port || 443);
+      const key = String(x.ip) + ':' + port;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ ip: String(x.ip), port });
+    }
+    if (!merged.length) return;
+
+    const results = await runLatencyTest(merged, cfg.optimizer.threads || 5, 5000);
+    const healthy = results.filter(r => r.ok && r.latency >= 0);
+    if (!healthy.length) return; // Fail-closed：本轮无法证明有更好节点，不覆盖现有池。
+
+    const bestLatency = healthy[0].latency;
+    const byKey = new Map(healthy.map(r => [String(r.ip) + ':' + Number(r.port || 443), r]));
+    const selected = [];
+    const selectedKeys = new Set();
+
+    // 先保留健康且仍在合理性能窗口内的当前节点，保持账号/会话出口连续性。
+    for (const x of current) {
+      if (selected.length >= poolSize || !x || !x.ip) break;
+      const port = Number(x.port || cfg.optimizer.port || 443);
+      const key = String(x.ip) + ':' + port;
+      const r = byKey.get(key);
+      if (!r || r.latency > bestLatency + hysteresisMs) continue;
+      selected.push({ ip: String(x.ip), port, latency: r.latency });
+      selectedKeys.add(key);
+    }
+
+    // 再用本轮真正更优/替补节点补足。
+    for (const r of healthy) {
+      if (selected.length >= poolSize) break;
+      const port = Number(r.port || 443);
+      const key = String(r.ip) + ':' + port;
+      if (selectedKeys.has(key)) continue;
+      selected.push({ ip: String(r.ip), port, latency: r.latency });
+      selectedKeys.add(key);
+    }
+    if (!selected.length) return;
+
+    const newIPs = selected.map((r, i) => ({
+      ip: r.ip,
+      port: r.port,
+      name: 'CF-BEST-' + String(i + 1).padStart(2, '0')
+    }));
+
+    const oldKeys = current.slice(0, poolSize).map(x => String(x.ip) + ':' + Number(x.port || 443));
+    const newKeys = newIPs.map(x => String(x.ip) + ':' + Number(x.port || 443));
+    if (oldKeys.length === newKeys.length && oldKeys.every((k, i) => k === newKeys[i])) return;
+
     cfg.preferredIPs = newIPs;
     await saveConfig(env, cfg);
-  } catch (e) { /* 忽略 */ }
+  } catch (e) {
+    // Fail-closed：自动优选异常时保留上一版 KV，不写空池、不做破坏性替换。
+  }
 }
 
 export default {
