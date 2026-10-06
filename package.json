@@ -1,13 +1,14 @@
 {
-  "name": "cfnext-worker-deploy",
+  "name": "cfnext-pages-deploy",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "patch": "node custom/patch.mjs",
     "verify:custom": "node custom/verify.mjs \"CFNext 明文版.js\"",
-    "check": "npm run verify:custom && wrangler deploy --dry-run --outdir .wrangler-dry-run",
-    "deploy": "npm run verify:custom && wrangler deploy"
+    "build:pages": "npm run verify:custom && node scripts/build-pages.mjs",
+    "verify:pages": "node scripts/verify-pages.mjs",
+    "check": "npm run build:pages && npm run verify:pages"
   },
   "devDependencies": {
     "wrangler": "4.135.0"
