@@ -71,101 +71,20 @@ replaceOnce(
   "    count: 5,          // [CUSTOM] 默认维护 5 个优选入口，避免大池污染客户端探测与频繁漂移"
 );
 
-// 5) Stateful scheduled Best-IP refresh.
-//    - current entries are re-tested together with new candidates
-//    - healthy current entries within hysteresis are retained first
-//    - only materially better/failed entries are replaced
-//    - pool defaults to 5 and remains configurable via env
+// 5) Stateful Best-IP refresh with a reusable refreshBestIPs() function.
+//    The scheduled() handler remains for compatibility, while Pages production
+//    calls the same logic through a protected HTTP operations endpoint.
+replaceOnce(
+  "pages bestip env docs",
+  "//    BESTIP_AUTO     1 启用定时自动优选（scheduled 刷新）",
+  "//    BESTIP_AUTO     1 启用自动优选；Pages 生产环境由受保护 HTTP 调度入口触发\\n//    BESTIP_CRON_TOKEN 保护 /_ops/bestip-refresh 的 Bearer Token（Pages 定时调度用）"
+);
+
 const scheduledStart = "async function handleScheduled(_controller, env, _ctx) {";
 const scheduledEnd = "\n\nexport default {";
-const scheduled = `async function handleScheduled(_controller, env, _ctx) {
-  const auto = String(env.BESTIP_AUTO || '').toLowerCase();
-  // 家宽模式定时刷新：HOME_WAN_AUTO=1 时强制刷新 VPN Gate 家宽节点缓存（保证订阅拿到最新最快节点）
-  const hwAuto = String(env.HOME_WAN_AUTO || '').toLowerCase();
-  if (hwAuto === '1' || hwAuto === 'true') {
-    try {
-      const hcfg = await loadConfig(env);
-      if (hcfg.homeWan) await resolveHomeWanNodes(env, hcfg, true);
-    } catch (e) { /* 家宽刷新失败不影响其它 */ }
-  }
-  if (auto !== '1' && auto !== 'true') return;
+const scheduled = "async function refreshBestIPs(env) {\n  const auto = String(env.BESTIP_AUTO || '').toLowerCase();\n  if (auto !== '1' && auto !== 'true') return { status: 'disabled' };\n\n  const cfg = await loadConfig(env);\n  const cand = await collectCandidates(cfg.optimizer);\n  const fresh = cand.candidates || [];\n  const current = Array.isArray(cfg.preferredIPs) ? cfg.preferredIPs : [];\n\n  // [CUSTOM] 小而稳定的优选池。BESTIP_POOL_SIZE 建议 3-5；允许 1-20。\n  const poolSize = Math.max(1, Math.min(20,\n    Number(env.BESTIP_POOL_SIZE || cfg.optimizer.count || 5) || 5));\n  // [CUSTOM] 防抖阈值：当前 IP 只要仍健康，且延迟不比本轮最佳差超过该值，就优先保留。\n  const hysteresisMs = Math.max(0, Math.min(500,\n    Number(env.BESTIP_HYSTERESIS_MS || 25) || 25));\n\n  // 把当前池也纳入复测，避免“新榜单稍快几毫秒”就整池替换。\n  const merged = [];\n  const seen = new Set();\n  for (const x of [...current, ...fresh]) {\n    if (!x || !x.ip) continue;\n    const port = Number(x.port || cfg.optimizer.port || 443);\n    const key = String(x.ip) + ':' + port;\n    if (seen.has(key)) continue;\n    seen.add(key);\n    merged.push({ ip: String(x.ip), port });\n  }\n  if (!merged.length) return { status: 'no-candidates', poolSize };\n\n  const results = await runLatencyTest(merged, cfg.optimizer.threads || 5, 5000);\n  const healthy = results.filter(r => r.ok && r.latency >= 0);\n  if (!healthy.length) return { status: 'no-healthy-candidates', poolSize }; // Fail-Closed\n\n  const bestLatency = healthy[0].latency;\n  const byKey = new Map(healthy.map(r => [String(r.ip) + ':' + Number(r.port || 443), r]));\n  const selected = [];\n  const selectedKeys = new Set();\n\n  // 先保留健康且仍在合理性能窗口内的当前节点，保持账号/会话出口连续性。\n  for (const x of current) {\n    if (selected.length >= poolSize || !x || !x.ip) break;\n    const port = Number(x.port || cfg.optimizer.port || 443);\n    const key = String(x.ip) + ':' + port;\n    const r = byKey.get(key);\n    if (!r || r.latency > bestLatency + hysteresisMs) continue;\n    selected.push({ ip: String(x.ip), port, latency: r.latency });\n    selectedKeys.add(key);\n  }\n\n  // 再用本轮真正更优/替补节点补足。\n  for (const r of healthy) {\n    if (selected.length >= poolSize) break;\n    const port = Number(r.port || 443);\n    const key = String(r.ip) + ':' + port;\n    if (selectedKeys.has(key)) continue;\n    selected.push({ ip: String(r.ip), port, latency: r.latency });\n    selectedKeys.add(key);\n  }\n  if (!selected.length) return { status: 'no-selection', poolSize };\n\n  const newIPs = selected.map((r, i) => ({\n    ip: r.ip,\n    port: r.port,\n    name: 'CF-BEST-' + String(i + 1).padStart(2, '0')\n  }));\n\n  const oldKeys = current.slice(0, poolSize).map(x => String(x.ip) + ':' + Number(x.port || 443));\n  const newKeys = newIPs.map(x => String(x.ip) + ':' + Number(x.port || 443));\n  if (oldKeys.length === newKeys.length && oldKeys.every((k, i) => k === newKeys[i])) {\n    return { status: 'unchanged', poolSize, bestLatency, selected: newIPs.length };\n  }\n\n  cfg.preferredIPs = newIPs;\n  await saveConfig(env, cfg);\n  return { status: 'updated', poolSize, bestLatency, selected: newIPs.length };\n}\n\nasync function handleScheduled(_controller, env, _ctx) {\n  // 兼容独立 Worker/本地测试；Pages 生产环境不依赖 Cron Trigger，而由受保护 HTTP 调度入口调用 refreshBestIPs。\n  const hwAuto = String(env.HOME_WAN_AUTO || '').toLowerCase();\n  if (hwAuto === '1' || hwAuto === 'true') {\n    try {\n      const hcfg = await loadConfig(env);\n      if (hcfg.homeWan) await resolveHomeWanNodes(env, hcfg, true);\n    } catch (e) { /* 家宽刷新失败不影响其它 */ }\n  }\n  try {\n    await refreshBestIPs(env);\n  } catch (e) {\n    // Fail-Closed：自动优选异常时保留上一版 KV，不写空池、不做破坏性替换。\n  }\n}";
 
-  try {
-    const cfg = await loadConfig(env);
-    const cand = await collectCandidates(cfg.optimizer);
-    const fresh = cand.candidates || [];
-    const current = Array.isArray(cfg.preferredIPs) ? cfg.preferredIPs : [];
-
-    // [CUSTOM] 小而稳定的优选池。BESTIP_POOL_SIZE 建议 3-5；允许 1-20。
-    const poolSize = Math.max(1, Math.min(20,
-      Number(env.BESTIP_POOL_SIZE || cfg.optimizer.count || 5) || 5));
-    // [CUSTOM] 防抖阈值：当前 IP 只要仍健康，且延迟不比本轮最佳差超过该值，就优先保留。
-    const hysteresisMs = Math.max(0, Math.min(500,
-      Number(env.BESTIP_HYSTERESIS_MS || 25) || 25));
-
-    // 把当前池也纳入复测，避免“新榜单稍快几毫秒”就整池替换。
-    const merged = [];
-    const seen = new Set();
-    for (const x of [...current, ...fresh]) {
-      if (!x || !x.ip) continue;
-      const port = Number(x.port || cfg.optimizer.port || 443);
-      const key = String(x.ip) + ':' + port;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push({ ip: String(x.ip), port });
-    }
-    if (!merged.length) return;
-
-    const results = await runLatencyTest(merged, cfg.optimizer.threads || 5, 5000);
-    const healthy = results.filter(r => r.ok && r.latency >= 0);
-    if (!healthy.length) return; // Fail-closed：本轮无法证明有更好节点，不覆盖现有池。
-
-    const bestLatency = healthy[0].latency;
-    const byKey = new Map(healthy.map(r => [String(r.ip) + ':' + Number(r.port || 443), r]));
-    const selected = [];
-    const selectedKeys = new Set();
-
-    // 先保留健康且仍在合理性能窗口内的当前节点，保持账号/会话出口连续性。
-    for (const x of current) {
-      if (selected.length >= poolSize || !x || !x.ip) break;
-      const port = Number(x.port || cfg.optimizer.port || 443);
-      const key = String(x.ip) + ':' + port;
-      const r = byKey.get(key);
-      if (!r || r.latency > bestLatency + hysteresisMs) continue;
-      selected.push({ ip: String(x.ip), port, latency: r.latency });
-      selectedKeys.add(key);
-    }
-
-    // 再用本轮真正更优/替补节点补足。
-    for (const r of healthy) {
-      if (selected.length >= poolSize) break;
-      const port = Number(r.port || 443);
-      const key = String(r.ip) + ':' + port;
-      if (selectedKeys.has(key)) continue;
-      selected.push({ ip: String(r.ip), port, latency: r.latency });
-      selectedKeys.add(key);
-    }
-    if (!selected.length) return;
-
-    const newIPs = selected.map((r, i) => ({
-      ip: r.ip,
-      port: r.port,
-      name: 'CF-BEST-' + String(i + 1).padStart(2, '0')
-    }));
-
-    const oldKeys = current.slice(0, poolSize).map(x => String(x.ip) + ':' + Number(x.port || 443));
-    const newKeys = newIPs.map(x => String(x.ip) + ':' + Number(x.port || 443));
-    if (oldKeys.length === newKeys.length && oldKeys.every((k, i) => k === newKeys[i])) return;
-
-    cfg.preferredIPs = newIPs;
-    await saveConfig(env, cfg);
-  } catch (e) {
-    // Fail-closed：自动优选异常时保留上一版 KV，不写空池、不做破坏性替换。
-  }
-}`;
-
-replaceRange("stateful scheduled best-ip", scheduledStart, scheduledEnd, scheduled);
-
+replaceRange("stateful pages-compatible best-ip", scheduledStart, scheduledEnd, scheduled);
 
 // 6) Expose local build identity in the UI and status APIs so the running
 //    Worker can be distinguished from raw upstream even when VERSION is equal.
@@ -173,6 +92,12 @@ replaceOnce(
   "public version identity",
   "  if (segs[0] === 'version') {\n    return json({ version: VERSION });\n  }",
   "  if (segs[0] === 'version') {\n    return json({\n      version: VERSION,\n      patchset: CUSTOM_PATCHSET,\n      repo: CUSTOM_REPO,\n      upstream: CUSTOM_UPSTREAM\n    });\n  }"
+);
+
+replaceOnce(
+  "pages operations endpoint",
+  "  // ---------- 登录 / 首次设置 ----------",
+  "  // ---------- Pages 运维调度入口 ----------\n  // Pages 没有使用本仓库旧 Worker Cron Trigger；由外部调度器以 Bearer Token 调用。\n  if (segs[0] === '_ops' && segs[1] === 'bestip-refresh') {\n    if (request.method !== 'POST') return new Response('Not Found', { status: 404 });\n    const expected = String(env.BESTIP_CRON_TOKEN || '');\n    const auth = request.headers.get('Authorization') || '';\n    if (!expected || auth !== 'Bearer ' + expected) return new Response('Not Found', { status: 404 });\n    try {\n      const result = await refreshBestIPs(env);\n      return json({ ok: true, data: result });\n    } catch (e) {\n      return json({ ok: false, msg: 'Best-IP 刷新失败: ' + (e.message || e) }, 500);\n    }\n  }\n\n  // ---------- 登录 / 首次设置 ----------"
 );
 
 replaceOnce(
