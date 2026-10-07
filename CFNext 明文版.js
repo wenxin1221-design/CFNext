@@ -12,8 +12,7 @@
 //    TROJAN          true/1 开启 Trojan 协议（TROJAN_PASSWORD 必填）
 //    ALPN            自定义 ALPN 协商
 //    YX              自定义优选 IP 列表（IP:port#名称，逗号分隔）；YXURL 优选器自定义数据源
-//    BESTIP_AUTO     1 启用自动优选；Pages 生产环境由受保护 HTTP 调度入口触发
-//    BESTIP_CRON_TOKEN 保护 /_ops/bestip-refresh 的 Bearer Token（Pages 定时调度用）
+//    BESTIP_AUTO     1 启用自动优选；Pages 生产环境由受保护 HTTP 调度入口触发\n//    BESTIP_CRON_TOKEN 保护 /_ops/bestip-refresh 的 Bearer Token（Pages 定时调度用）
 //    DEPLOY_EDITION  部署形态：明文版 / 混淆版（手动维护），决定版本更新拉取的仓库文件
 //    CF_ACCOUNT_ID / CF_API_TOKEN  CF 用量监控（需 Account Analytics 读权限）
 //    K               绑定 KV 后读取图形化配置
