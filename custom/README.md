@@ -1,6 +1,6 @@
 # Stable upstream updates
 
-Production runs upstream CFNext with the stable-bestip-v2 adapter. The adapter parses source with Acorn, finds unique config read/write, candidate-collection and TCP-probe structures, patches stable defaults and the update repository, and wraps the upstream worker. It does not rely on minified function names. Readable UI anchors must still match exactly once.
+The repository builds upstream CFNext with the stable-bestip-v2 adapter. Confirm the live /version response after each Pages deployment; a successful upstream-sync run alone does not prove that production has updated. The adapter parses source with Acorn, finds unique config read/write, candidate-collection and TCP-probe structures, patches stable defaults and the update repository, and wraps the upstream worker. It does not rely on minified function names. Readable UI anchors must still match exactly once.
 
 The scheduled sync fetches upstream main into a temporary candidate, parses it, applies the adapter, runs behavior tests and validates the Pages artifact before committing the source and UPSTREAM_COMMIT together. Failed candidates never reach main. Version 2.x from 2.6 onward is eligible only if every structural contract matches; new major versions require review. No temporary 2.3 pin remains.
 
