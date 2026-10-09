@@ -10,7 +10,7 @@
     "verify:pages": "node scripts/verify-pages.mjs",
     "check": "npm run build:pages && npm run verify:pages && npm run verify:bundle",
     "test": "node --experimental-vm-modules --test custom/runtime.test.mjs",
-    "verify:bundle": "wrangler deploy dist/_worker.js --dry-run --outdir .wrangler/verify --compatibility-date 2026-10-09"
+    "verify:bundle": "wrangler deploy dist/_worker.js --dry-run --name cfnext-pages-validation --outdir .wrangler/verify --compatibility-date 2026-10-09"
   },
   "devDependencies": {
     "acorn": "8.15.0",
