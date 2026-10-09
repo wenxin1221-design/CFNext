@@ -12,9 +12,9 @@ if (!fs.existsSync(source)) {
 
 const code = fs.readFileSync(source, "utf8");
 const required = [
-  "from 'cloudflare:sockets'",
+  'cloudflare:sockets',
   "export default",
-  "const CUSTOM_PATCHSET = 'stable-bestip-v1';",
+  "const CUSTOM_PATCHSET = 'stable-bestip-v2';",
   "patchset: CUSTOM_PATCHSET",
   "BESTIP_CRON_TOKEN",
   "/_ops/bestip-refresh"
@@ -33,7 +33,7 @@ fs.writeFileSync(target, code);
 const meta = {
   generatedAt: new Date().toISOString(),
   source: "CFNext 明文版.js",
-  patchset: "stable-bestip-v1",
+  patchset: "stable-bestip-v2",
   deployment: "cloudflare-pages-advanced-mode"
 };
 fs.writeFileSync(path.join(outDir, "build-meta.json"), JSON.stringify(meta, null, 2) + "\n");

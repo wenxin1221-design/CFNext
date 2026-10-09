@@ -1,0 +1,11 @@
+# Stable upstream updates
+
+Production runs upstream CFNext with the stable-bestip-v2 adapter. The adapter parses source with Acorn, finds unique config read/write, candidate-collection and TCP-probe structures, patches stable defaults and the update repository, and wraps the upstream worker. It does not rely on minified function names. Readable UI anchors must still match exactly once.
+
+The scheduled sync fetches upstream main into a temporary candidate, parses it, applies the adapter, runs behavior tests and validates the Pages artifact before committing the source and UPSTREAM_COMMIT together. Failed candidates never reach main. Version 2.x from 2.6 onward is eligible only if every structural contract matches; new major versions require review. No temporary 2.3 pin remains.
+
+Pages uses npm run build:pages and dist. KV config and bindings are preserved. The wrapper supplies /version, authenticated POST /_ops/bestip-refresh, and version metadata in authenticated status/update responses. Unhealthy measurements retain the old pool; no empty pool is saved. Source failures may still revalidate the existing pool. Healthy old entries retain their order inside the hysteresis window. Zero hysteresis is supported. Save failures are reported, and a fresh config read preserves unrelated panel changes before writing. A concurrent pool change defers the refresh. This is a best-effort guard, not an atomic KV lock across isolates.
+
+Cloudflare-side TCP probes measure Cloudflare's outbound path; they do not establish reachability from China North. A no-healthy-candidates result remains visible and does not justify replacing the pool with untested entries. China North ingress quality requires local N150 measurements.
+
+Rollback: revert the upgrade commit (source, patch layer, dependency lock and workflows together) and use the previous successful Pages deployment if needed. Never restore or clear KV as part of a code rollback. The upstream obfuscated ZIP is a historical reference only; Pages builds from the customized plain JS source.

@@ -1,34 +1,27 @@
 name: Validate customized CFNext
-
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-
       - name: Install pinned tooling
         run: npm ci
-
       - name: Verify local customization
         run: npm run verify:custom
-
+      - name: Test stable refresh behavior
+        run: npm test
       - name: Build Pages Advanced Mode artifact
         run: npm run check
