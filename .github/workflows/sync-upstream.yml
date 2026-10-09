@@ -27,14 +27,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags https://github.com/PAICNI/CFNext.git main
+          # Temporary compatibility pin: upstream 2.5+ minifies/renames patch anchors.
+          # Advance only after patch, verification and Pages checks pass on that SHA.
+          upstream_ref="48654415b1954daa9825083c0534b87eeb216787"
+          trap 'echo "::error::Upstream source check failed at line $LINENO (ref $upstream_ref)."' ERR
+          git fetch --no-tags https://github.com/PAICNI/CFNext.git "$upstream_ref"
 
           upstream_sha="$(git rev-parse FETCH_HEAD)"
+          test "$upstream_sha" = "$upstream_ref"
+          echo "Using compatibility-pinned upstream: $upstream_sha"
+          echo "::notice::Automatic upstream advancement is temporarily pinned to compatible CFNext 2.3.0."
           candidate="$RUNNER_TEMP/cfnext-upstream.js"
           pages_zip="$RUNNER_TEMP/cfnext-pages.zip"
 
-          git show "FETCH_HEAD:CFNext 明文版.js" > "$candidate"
-          git show "FETCH_HEAD:CFNext 混淆Pages版.zip" > "$pages_zip"
+          git show "$upstream_sha:CFNext 明文版.js" > "$candidate"
+          git show "$upstream_sha:CFNext 混淆Pages版.zip" > "$pages_zip"
 
           size="$(wc -c < "$candidate")"
           test "$size" -ge 100000
