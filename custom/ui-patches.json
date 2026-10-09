@@ -1,0 +1,22 @@
+[
+  [
+    "dashboard runtime identity",
+    "        <div class=\"kv\"><span class=\"k\">协议</span><span class=\"v\" id=\"stProto\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"stKv\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">面板入口</span><span class=\"v\" id=\"stEntry\">—</span></div>",
+    "        <div class=\"kv\"><span class=\"k\">协议</span><span class=\"v\" id=\"stProto\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">本地定制</span><span class=\"v ok\" id=\"stPatch\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">代码来源</span><span class=\"v\" id=\"stRepo\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"stKv\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">面板入口</span><span class=\"v\" id=\"stEntry\">—</span></div>"
+  ],
+  [
+    "settings runtime identity",
+    "        <div class=\"kv\"><span class=\"k\">面板版本</span><span class=\"v\" id=\"aVer\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"aKv\">—</span></div>",
+    "        <div class=\"kv\"><span class=\"k\">面板版本</span><span class=\"v\" id=\"aVer\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">本地补丁</span><span class=\"v ok\" id=\"aPatch\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">代码来源</span><span class=\"v\" id=\"aRepo\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">上游来源</span><span class=\"v\" id=\"aUpstream\">—</span></div>\n        <div class=\"kv\"><span class=\"k\">KV 持久化</span><span class=\"v\" id=\"aKv\">—</span></div>"
+  ],
+  [
+    "render custom identity",
+    "  var v = d.version || '—';\n  var kindName = (d.kind === '混淆版') ? '混淆版' : '明文版';   // 部署形态（明文版 / 混淆版），由后端自检\n  $('sideVer').textContent = 'v' + v + ' ' + kindName;\n  topVerText = 'v' + v + ' ' + kindName;\n  $('aVer').textContent = v + ' ' + kindName;",
+    "  var v = d.version || '—';\n  var kindName = (d.kind === '混淆版') ? '混淆版' : '明文版';   // 部署形态（明文版 / 混淆版），由后端自检\n  var patchset = d.patchset || '';\n  var shortPatch = patchset ? patchset.replace(/^stable-bestip-/, '') : '';\n  var customSuffix = shortPatch ? ' · Custom ' + shortPatch : '';\n  $('sideVer').textContent = 'v' + v + ' ' + kindName + customSuffix;\n  topVerText = 'v' + v + ' ' + kindName + customSuffix;\n  $('aVer').textContent = v + ' ' + kindName;\n  $('stPatch').textContent = patchset || '未检测到';\n  $('stPatch').className = 'v ' + (patchset ? 'ok' : 'bad');\n  $('stRepo').textContent = d.repo || '—';\n  $('aPatch').textContent = patchset || '未检测到';\n  $('aPatch').className = 'v ' + (patchset ? 'ok' : 'bad');\n  $('aRepo').textContent = d.repo || '—';\n  $('aUpstream').textContent = d.upstream || '—';"
+  ],
+  [
+    "update ui identity",
+    "    topVerText = 'v' + d.current + ' ' + kindName;\n    sv.textContent = topVerText;",
+    "    var shortPatch = d.patchset ? String(d.patchset).replace(/^stable-bestip-/, '') : '';\n    var customSuffix = shortPatch ? ' · Custom ' + shortPatch : '';\n    topVerText = 'v' + d.current + ' ' + kindName + customSuffix;\n    sv.textContent = topVerText;"
+  ]
+]

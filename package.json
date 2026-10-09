@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "patch": "node custom/patch.mjs",
-    "verify:custom": "node custom/verify.mjs \"CFNext 明文版.js\"",
+    "verify:custom": "node custom/verify.mjs \"CFNext \u660e\u6587\u7248.js\"",
     "build:pages": "npm run verify:custom && node scripts/build-pages.mjs",
     "verify:pages": "node scripts/verify-pages.mjs",
-    "check": "npm run build:pages && npm run verify:pages"
+    "check": "npm run build:pages && npm run verify:pages && npm run verify:bundle",
+    "test": "node --experimental-vm-modules --test custom/runtime.test.mjs",
+    "verify:bundle": "wrangler deploy dist/_worker.js --dry-run --outdir .wrangler/verify --compatibility-date 2026-10-09"
   },
   "devDependencies": {
+    "acorn": "8.15.0",
     "wrangler": "4.135.0"
   }
 }
