@@ -1,8 +1,7 @@
 name: Deploy CFNext Pages with Wrangler
 
 on:
-  push:
-    branches: [main]
+  # Manual only while Cloudflare blocks this Pages project (API error 8000119).
   workflow_dispatch:
 
 permissions:
